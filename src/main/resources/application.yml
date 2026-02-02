@@ -8,7 +8,7 @@ spring:
   batch:
     job:
       enabled: on
-      name: userInitCsvToDbJob
+      name: reportSaveCsvToDbJob
     jdbc:
       initialize-schema: embedded
 
