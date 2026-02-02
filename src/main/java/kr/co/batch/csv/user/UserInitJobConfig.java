@@ -1,8 +1,8 @@
-package kr.co.batch.csv;
+package kr.co.batch.csv.user;
 
 import javax.sql.DataSource;
-import kr.co.batch.csv.domain.User;
-import kr.co.batch.csv.dto.UserCsv;
+import kr.co.batch.csv.user.domain.User;
+import kr.co.batch.csv.user.dto.UserCsv;
 import lombok.RequiredArgsConstructor;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;

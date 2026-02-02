@@ -1,4 +1,4 @@
-package kr.co.batch.csv.domain;
+package kr.co.batch.csv.user.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
