@@ -8,8 +8,15 @@ spring:
   batch:
     job:
       enabled: on
+      name: userInitCsvToDbJob
     jdbc:
       initialize-schema: embedded
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create
+
 
 logging:
   level:

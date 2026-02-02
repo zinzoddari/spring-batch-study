@@ -28,6 +28,7 @@ dependencies {
     // spring
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-batch")
+    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 
     // lombok
     compileOnly("org.projectlombok:lombok")
@@ -46,4 +47,3 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
-
