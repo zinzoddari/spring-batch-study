@@ -25,13 +25,13 @@ public class OrderDailySummary {
 
     private Long totalItemCount;
 
-    public static OrderDailySummary create(final LocalDate orderDate, final Long amountKrw, final Long itemCount) {
+    public static OrderDailySummary create(final LocalDate orderDate, final Long totalAmountKrw, final Long totalOrderCount, final Long totalItemCount) {
         OrderDailySummary summary = new OrderDailySummary();
 
         summary.orderDate = orderDate;
-        summary.totalAmountKrw = amountKrw;
-        summary.totalOrderCount = 1L;
-        summary.totalItemCount = itemCount;
+        summary.totalAmountKrw = totalAmountKrw;
+        summary.totalOrderCount = totalOrderCount;
+        summary.totalItemCount = totalItemCount;
 
         return summary;
     }

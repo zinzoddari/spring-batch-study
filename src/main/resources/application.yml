@@ -8,7 +8,6 @@ spring:
   batch:
     job:
       enabled: on
-      name: reportSaveCsvToDbJob
     jdbc:
       initialize-schema: embedded
 

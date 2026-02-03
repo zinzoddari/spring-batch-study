@@ -1,8 +1,9 @@
 package kr.co.batch.csv.report;
 
-import java.time.LocalDate;
+import java.sql.Date;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import javax.sql.DataSource;
 import kr.co.batch.csv.report.domain.Order;
 import kr.co.batch.csv.report.domain.OrderDailySummary;
@@ -10,15 +11,18 @@ import kr.co.batch.csv.report.dto.ReportCsvDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.ItemWriter;
+import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
+import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
@@ -33,46 +37,52 @@ public class ReportSaveCsvToDbJobConfig {
     private final DataSource dataSource;
 
     @Bean
-    public Job reportSaveCsvToDbJob() {
-        return new JobBuilder("reportSaveCsvToDbJob", jobRepository)
-            .start(reportSaveCsvToDbStep())
-            .next(reportSummuryStep())
+    public Job orderImportJob(final Step importOrderTxStep, final Step dailySummaryStep) {
+        return new JobBuilder("orderImportJob", jobRepository)
+            .start(importOrderTxStep)
+            .next(dailySummaryStep)
             .build();
     }
 
     @Bean
-    public Step reportSaveCsvToDbStep() {
-        return new StepBuilder("reportSaveCsvToDbStep", jobRepository)
+    public Step importOrderTxStep(
+        final FlatFileItemReader<ReportCsvDto> reportSaveCsvToDbReader,
+        final ItemProcessor<ReportCsvDto, Order> reportSaveCsvToDbProcessor,
+        final ItemWriter<Order> reportSaveCsvToDbWriter
+    ) {
+        return new StepBuilder("importOrderTxStep", jobRepository)
             .<ReportCsvDto, Order>chunk(2, platformTransactionManager)
-            .reader(reportSaveCsvToDbReader())
-            .processor(reportSaveCsvToDbProcessor())
-            .writer(reportSaveCsvToDbWriter())
+            .reader(reportSaveCsvToDbReader)
+            .processor(reportSaveCsvToDbProcessor)
+            .writer(reportSaveCsvToDbWriter)
             .build();
     }
 
     @Bean
-    public Step reportSummuryStep() {
-        return new StepBuilder("reportSummuryStep", jobRepository)
-            .<Order, OrderDailySummary>chunk(3, platformTransactionManager)
-            .reader(reportSummaryReader())
-            .processor(reportSummaryProcessor())
-            .writer(reportSummaryWriter())
+    public Step dailySummaryStep(
+        final JdbcCursorItemReader<OrderDailySummary> reportSummaryReader,
+        final ItemWriter<OrderDailySummary> reportSummaryWriter
+    ) {
+        return new StepBuilder("dailySummaryStep", jobRepository)
+            .<OrderDailySummary, OrderDailySummary>chunk(1, platformTransactionManager)
+            .reader(reportSummaryReader)
+            .writer(reportSummaryWriter)
             .build();
     }
 
     @Bean
-    public ItemReader<ReportCsvDto> reportSaveCsvToDbReader() {
+    @StepScope
+    public FlatFileItemReader<ReportCsvDto> reportSaveCsvToDbReader(@Value("#{jobParameters['targetDate']}") final String targetDate) {
         return new FlatFileItemReaderBuilder<ReportCsvDto>()
             .name("reportSaveCsvToDbReader")
-            .resource(new ClassPathResource("orders_2026-02-02.csv"))
+            .resource(new ClassPathResource(String.format("orders_%s.csv", targetDate)))
             .linesToSkip(1)
             .delimited()
             .names("order_id", "user_id", "order_datetime", "amount", "currency", "status", "item_count")
             .fieldSetMapper(it -> new ReportCsvDto(
                 it.readString("order_id"),
                 it.readLong("user_id"),
-                LocalDateTime.parse(it.readString("order_datetime"),
-                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                it.readString("order_datetime"),
                 it.readLong("amount"),
                 it.readString("currency"),
                 it.readString("status"),
@@ -83,7 +93,43 @@ public class ReportSaveCsvToDbJobConfig {
 
     @Bean
     public ItemProcessor<ReportCsvDto, Order> reportSaveCsvToDbProcessor() {
-        return item -> item.orderId() == null ? null : Order.create(item);
+        return item -> {
+            if (!"PAID".equals(item.status())) {
+                return null;
+            }
+
+            if (item.amount() <= 0) {
+                return null;
+            }
+
+            if (item.itemCount() <= 0) {
+                return null;
+            }
+
+            if (!"KRW".equals(item.currency()) && !"USD".equals(item.currency())) {
+                return null;
+            }
+
+            LocalDateTime dateTime;
+
+            try {
+                dateTime = LocalDateTime.parse(item.orderDateTime(),
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            } catch (DateTimeParseException e) {
+                return null;
+            }
+
+            final Long amountKrw = "USD".equals(item.currency()) ? item.amount() * 1300 : item.amount();
+
+            return Order.create(
+                item.orderId(),
+                item.userId(),
+                dateTime,
+                dateTime.toLocalDate(),
+                amountKrw,
+                item.itemCount()
+            );
+        };
     }
 
     @Bean
@@ -105,35 +151,31 @@ public class ReportSaveCsvToDbJobConfig {
     }
 
     @Bean
-    public ItemReader<Order> reportSummaryReader() {
-        return new JdbcCursorItemReaderBuilder<Order>()
-            .name("reportSummuryReader")
+    @StepScope
+    public JdbcCursorItemReader<OrderDailySummary> reportSummaryReader(@Value("#{jobParameters['targetDate']}") final String targetDate) {
+        return new JdbcCursorItemReaderBuilder<OrderDailySummary>()
+            .name("reportSummaryReader")
             .dataSource(dataSource)
             .sql("""
-                    SELECT order_id as orderId,
-                           user_id as userId,
-                           order_datetime as orderDatetime,
-                           order_date as orderDate,
-                           amount_krw as amountKrw,
-                           item_count as itemCount
-                    FROM order_tx
-                    WHERE order_date = '2026-02-02'
-                """)  // TODO: order_date 이거 외부로 어떻게 받을 수 있을까
-            .rowMapper((rs, rowNum) -> Order.create(
-                rs.getString("orderId"),
-                rs.getLong("userId"),
-                LocalDateTime.parse(rs.getString("orderDatetime"), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
-                LocalDate.parse(rs.getString("orderDate"), DateTimeFormatter.ofPattern("yyyy-MM-dd")),
-                rs.getLong("amountKrw"),
-                rs.getLong("itemCount")
+                    select
+                        order_date as orderDate,
+                        sum(amount_krw) as totalAmountKrw,
+                        count(order_id) as totalOrderCount,
+                        sum(item_count) as totalItemCount
+                    from order_tx
+                    where order_date = ?
+                    group by order_date
+                """)
+            .preparedStatementSetter(ps ->
+                ps.setDate(1, Date.valueOf(targetDate))
+            )
+            .rowMapper((rs, rowNum) -> OrderDailySummary.create(
+                rs.getDate("orderDate").toLocalDate(),
+                rs.getLong("totalAmountKrw"),
+                rs.getLong("totalOrderCount"),
+                rs.getLong("totalItemCount")
             ))
-            .fetchSize(1000) // ?
             .build();
-    }
-
-    @Bean
-    public ItemProcessor<Order, OrderDailySummary> reportSummaryProcessor() {
-        return item -> OrderDailySummary.create(item.getOrderDate(), item.getAmountKrw(), item.getItemCount());
     }
 
     @Bean
@@ -144,9 +186,9 @@ public class ReportSaveCsvToDbJobConfig {
                 INSERT INTO order_daily_summary (order_date, total_amount_krw, total_order_count, total_item_count)
                 VALUES (:orderDate, :totalAmountKrw, :totalOrderCount, :totalItemCount)
                 ON DUPLICATE KEY UPDATE
-                    total_amount_krw = total_amount_krw + VALUES(total_amount_krw),
-                    total_order_count = total_order_count + VALUES(total_order_count),
-                    total_item_count = total_item_count + VALUES(total_item_count)
+                    total_amount_krw = VALUES(total_amount_krw),
+                    total_order_count = VALUES(total_order_count),
+                    total_item_count = VALUES(total_item_count)
                 """)
             .beanMapped()
             .build();
